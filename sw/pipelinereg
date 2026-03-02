@@ -1,0 +1,188 @@
+#!/usr/bin/perl -w
+use lib "/usr/local/netfpga/lib/Perl5";
+use strict;
+
+# Pipeline Register Addresses
+# PIPELINE_BLOCK_ADDR = 0x4, REG_ADDR_WIDTH = 4
+# Layout: 5 software (0-4), 2 hardware (5-6)
+# Full addr = (BLOCK_ADDR << 6) | (REG_OFFSET << 2)
+
+my $PIPELINE_REG_DMEM_DATA_LO = 0x2000200;  # Offset 0
+my $PIPELINE_REG_DMEM_DATA_HI = 0x2000204;  # Offset 1
+my $PIPELINE_REG_DMEM_ADDR    = 0x2000208;  # Offset 2
+my $PIPELINE_REG_IMEM_ADDR    = 0x200020C;  # Offset 3
+my $PIPELINE_REG_PC_SET       = 0x2000210;  # Offset 4 (Software: bits [7:0]=PC value, bit [8]=load strobe)
+my $PIPELINE_REG_IMEM_OUT     = 0x2000214;  # Offset 5 (Hardware reg - read only)
+my $PIPELINE_REG_PC_CURRENT   = 0x2000218;  # Offset 6 (Hardware reg - read only, word address)
+my $PIPELINE_REG_PROC_RESET   = 0x2000218;  # Offset 6 (Processor reset - same as PC_CURRENT in some configs)
+
+sub regwrite {
+   my( $addr, $value ) = @_;
+   my $cmd = sprintf( "regwrite 0x%08x 0x%08x", $addr, $value );
+   my $result = `$cmd`;
+   printf("Write: 0x%08x = 0x%08x\n", $addr, $value);
+}
+
+sub regread {
+   my( $addr ) = @_;
+   my $cmd = sprintf( "regread 0x%08x", $addr );
+   my @out = `$cmd`;
+   my $result = $out[0];
+   if ( $result =~ m/Reg (0x[0-9a-f]+) \((\d+)\):\s+(0x[0-9a-f]+) \((\d+)\)/ ) {
+      $result = $3;
+   }
+   return $result;
+}
+
+sub write_instruction {
+   my($addr, $instr) = @_;
+   printf("Writing instruction 0x%08x to IMEM address 0x%08x\n", $instr, $addr);
+   regwrite($PIPELINE_REG_DMEM_DATA_LO, $instr);
+   regwrite($PIPELINE_REG_IMEM_ADDR, $addr);
+}
+
+sub read_instruction {
+   my($addr) = @_;
+   regwrite($PIPELINE_REG_IMEM_ADDR, $addr);
+   my $instr = regread($PIPELINE_REG_IMEM_OUT);
+   printf("Read instruction at IMEM address 0x%08x: 0x%s\n", $addr, $instr);
+   return $instr;
+}
+
+sub write_data {
+   my($addr, $data_lo, $data_hi) = @_;
+   printf("Writing data to DMEM address 0x%08x: HI=0x%08x LO=0x%08x\n", $addr, $data_hi, $data_lo);
+   regwrite($PIPELINE_REG_DMEM_DATA_LO, $data_lo);
+   regwrite($PIPELINE_REG_DMEM_DATA_HI, $data_hi);
+   regwrite($PIPELINE_REG_DMEM_ADDR, $addr);
+}
+
+sub proc_reset_assert {
+   printf("Asserting processor reset (PC will hold current value)...\n");
+   regwrite($PIPELINE_REG_PROC_RESET, 0x1);
+}
+
+sub proc_reset_release {
+   printf("Releasing processor reset (PC can execute)...\n");
+   regwrite($PIPELINE_REG_PROC_RESET, 0x0);
+}
+
+# Set program counter (word address). Writes value with load strobe (bit 8 = 1).
+sub setpc {
+   my($value) = @_;
+   # Bit 8 = host_pc_load strobe; bits [7:0] = host_pc_value (word address)
+   my $regval = ($value & 0xff) | 0x100;
+   printf("Setting PC to word address 0x%02x (load strobe asserted)\n", $value);
+   regwrite($PIPELINE_REG_PC_SET, $regval);
+}
+
+# Read current program counter (word address).
+sub getpc {
+   my $pc = regread($PIPELINE_REG_PC_CURRENT);
+   printf("PC (word address): 0x%s\n", $pc);
+   return $pc;
+}
+
+sub allregs {
+   print "\n=== Pipeline Register Status ===\n";
+   print "DMEM_DATA_LO: ", regread($PIPELINE_REG_DMEM_DATA_LO), "\n";
+   print "DMEM_DATA_HI: ", regread($PIPELINE_REG_DMEM_DATA_HI), "\n";
+   print "DMEM_ADDR:    ", regread($PIPELINE_REG_DMEM_ADDR), "\n";
+   print "IMEM_ADDR:    ", regread($PIPELINE_REG_IMEM_ADDR), "\n";
+   print "IMEM_OUT:     ", regread($PIPELINE_REG_IMEM_OUT), "\n";
+   print "PC_CURRENT:   ", regread($PIPELINE_REG_PC_CURRENT), "\n";
+   my $proc_rst = regread($PIPELINE_REG_PROC_RESET);
+   my $rst_status = (hex($proc_rst) & 0x1) ? "RESET ASSERTED" : "RUNNING";
+   print "PROC_RESET (0x$proc_rst): $rst_status\n";
+   print "================================\n\n";
+}
+
+sub usage {
+   print "Usage: pipelinereg <cmd> <cmd options>\n";
+   print "  Commands:\n";
+   print "    allregs                              displays all registers\n";
+   print "    proc_reset                           assert processor reset\n";
+   print "    proc_run                             release processor reset\n";
+   print "    setpc <value_hex>                    set program counter (word address, 8-bit)\n";
+   print "    getpc                                read current program counter\n";
+   print "    write_inst <addr_hex> <instr_hex>   write instruction to IMEM\n";
+   print "    read_inst <addr_hex>                read instruction from IMEM\n";
+   print "    write_data <addr_hex> <lo_hex> <hi_hex>  write data to DMEM\n";
+   print "    regread <addr_hex>                  read raw register at address\n";
+   print "    regwrite <addr_hex> <value_hex>     write raw register at address\n";
+}
+
+my $numargs = $#ARGV + 1;
+if( $numargs < 1 ) {
+   usage();
+   exit(1);
+}
+
+my $cmd = $ARGV[0];
+
+if ($cmd eq "allregs") {
+   allregs();
+} elsif ($cmd eq "proc_reset") {
+   proc_reset_assert();
+} elsif ($cmd eq "proc_run") {
+   proc_reset_release();
+} elsif ($cmd eq "setpc") {
+   if ($numargs < 2) {
+      print "Error: setpc requires value (hex, 8-bit word address)\n";
+      usage();
+      exit(1);
+   }
+   my $value = hex($ARGV[1]);
+   setpc($value);
+} elsif ($cmd eq "getpc") {
+   getpc();
+} elsif ($cmd eq "write_inst") {
+   if ($numargs < 3) {
+      print "Error: write_inst requires address and instruction\n";
+      usage();
+      exit(1);
+   }
+   my $addr = hex($ARGV[1]);
+   my $instr = hex($ARGV[2]);
+   write_instruction($addr, $instr);
+} elsif ($cmd eq "read_inst") {
+   if ($numargs < 2) {
+      print "Error: read_inst requires address\n";
+      usage();
+      exit(1);
+   }
+   my $addr = hex($ARGV[1]);
+   read_instruction($addr);
+} elsif ($cmd eq "write_data") {
+   if ($numargs < 4) {
+      print "Error: write_data requires address, data_lo, and data_hi\n";
+      usage();
+      exit(1);
+   }
+   my $addr = hex($ARGV[1]);
+   my $data_lo = hex($ARGV[2]);
+   my $data_hi = hex($ARGV[3]);
+   write_data($addr, $data_lo, $data_hi);
+} elsif ($cmd eq "regread") {
+   if ($numargs < 2) {
+      print "Error: regread requires address\n";
+      usage();
+      exit(1);
+   }
+   my $addr = hex($ARGV[1]);
+   my $val = regread($addr);
+   printf("Read from 0x%08x: %s\n", $addr, $val);
+} elsif ($cmd eq "regwrite") {
+   if ($numargs < 3) {
+      print "Error: regwrite requires address and value\n";
+      usage();
+      exit(1);
+   }
+   my $addr = hex($ARGV[1]);
+   my $val = hex($ARGV[2]);
+   regwrite($addr, $val);
+} else {
+   print "Unrecognized command: $cmd\n";
+   usage();
+   exit(1);
+}
