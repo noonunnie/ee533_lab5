@@ -57,11 +57,21 @@ module pipeline
    // Pipeline hardware registers
    reg [31:0]                    imem_out;
    wire [7:0]                    host_pc_current;
+   wire [63:0]                   host_data_rd;
+   wire [31:0]                   dmem_rd_lo = host_data_rd[31:0];
+   wire [31:0]                   dmem_rd_hi = host_data_rd[63:32];
 
    // Internal control
    reg [31:0]                    inst_write_data;
    reg                           inst_wr_en;
    reg [31:0]                    imem_addr_prev;
+
+   // Host data memory control (address/data come from software regs,
+   // control bits from pipeline_c)
+   wire [7:0]   host_data_addr   = dmem_addr[7:0];
+   wire [63:0]  host_data_wr     = {dmem_data_hi, dmem_data_lo};
+   wire         host_data_we     = pipeline_c[16];
+   wire         host_data_rd_en  = pipeline_c[17];
 
    // 2/18/26 LAB5 UPDATE: this brings our schematic design into our wrapper
 
@@ -73,7 +83,12 @@ module pipeline
       .host_inst_addr(imem_addr[7:0]),
       .host_pc_load(pipeline_c[8]),
       .host_pc_value(pipeline_c[7:0]),
-      .host_pc_current(host_pc_current)
+      .host_pc_current(host_pc_current),
+      .host_data_addr(host_data_addr),
+      .host_data_wr(host_data_wr),
+      .host_data_we(host_data_we),
+      .host_data_rd_en(host_data_rd_en),
+      .host_data_rd(host_data_rd)
    );
 
    // from ids.v
@@ -85,7 +100,7 @@ module pipeline
       .REG_ADDR_WIDTH      (`PIPELINE_REG_ADDR_WIDTH),
       .NUM_COUNTERS        (0),
       .NUM_SOFTWARE_REGS   (5),
-      .NUM_HARDWARE_REGS   (2)
+      .NUM_HARDWARE_REGS   (4)
    ) pipeline_regs (
       .reg_req_in       (reg_req_in),
       .reg_ack_in       (reg_ack_in),
@@ -105,7 +120,7 @@ module pipeline
       .counter_decrement(),
 
       .software_regs    ({imem_addr, dmem_addr, dmem_data_hi, dmem_data_lo, pipeline_c}),
-      .hardware_regs    ({imem_out, 24'b0, host_pc_current}),
+      .hardware_regs    ({imem_out, host_pc_current, dmem_rd_lo, dmem_rd_hi}),
 
       .clk              (clk),
       .reset            (reset)

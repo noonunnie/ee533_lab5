@@ -38,8 +38,18 @@
 			<nf:type>generic_hardware32</nf:type>
 		</nf:register>
 		<nf:register>
+		  <nf:name>reg_dmem_rd_lo</nf:name>
+			<nf:description>Read-only DMEM read data (low 32 bits)</nf:description>
+			<nf:type>generic_hardware32</nf:type>
+		</nf:register>
+		<nf:register>
+		  <nf:name>reg_dmem_rd_hi</nf:name>
+			<nf:description>Read-only DMEM read data (high 32 bits)</nf:description>
+			<nf:type>generic_hardware32</nf:type>
+		</nf:register>
+		<nf:register>
 		  <nf:name>pipeline_c</nf:name>
-			<nf:description>PC set: bits [7:0] = word address, bit [8] = load strobe (write 1 to load PC)</nf:description>
+			<nf:description>PC/DMEM control: bits [7:0] = PC word address, bit [8] = PC load strobe, bit [16] = DMEM host write enable, bit [17] = DMEM host read strobe</nf:description>
 			<nf:type>generic_software32</nf:type>
 		</nf:register>
 	</nf:registers>

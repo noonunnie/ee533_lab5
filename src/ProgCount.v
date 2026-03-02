@@ -24,7 +24,6 @@ module ProgCount (
             ProgCounter <= next_pc;
         else
             ProgCounter <= ProgCounter + PC_INCR;
-            
     end
 
 endmodule

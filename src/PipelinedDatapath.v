@@ -1,3 +1,10 @@
+// changes made to the original file from xilinx
+// added more comments to the code for readability
+// wire names updated to readable names
+// all host functions added to interface with the design
+// PC counter design updated to use the new ProgCount module
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 1995-2008 Xilinx, Inc.  All rights reserved.
 ////////////////////////////////////////////////////////////////////////////////
@@ -167,7 +174,12 @@ module PipelinedDatapath(clk,
                          host_inst_addr,
                          host_pc_load,
                          host_pc_value,
-                         host_pc_current);
+                         host_pc_current,
+                         host_data_addr,
+                         host_data_wr,
+                         host_data_we,
+                         host_data_rd_en,
+                         host_data_rd);
 
     input clk;
     input [31:0] InstData;
@@ -177,7 +189,12 @@ module PipelinedDatapath(clk,
     input host_pc_load;
     input [7:0] host_pc_value;
     output [7:0] host_pc_current;
-   
+    input  [7:0]  host_data_addr;   // data address (host)
+    input  [63:0] host_data_wr;     // data write value (host)
+    input         host_data_we;     // host write enable
+    input         host_data_rd_en;  // host read enable
+    output [63:0] host_data_rd;     // data read value back to host
+  
    wire [7:0] InstAddr;
    wire [63:0] ProgCounter;
    wire [31:0] InstID;
@@ -203,7 +220,7 @@ module PipelinedDatapath(clk,
    wire        MemWriteEn_EX;
    // Data memory read → MEM/WB
    wire [63:0] MemReadData;
-
+  
    reg_file XLXI_13 (.clk(clk), 
                      .r0addr(InstID[9:8]), 
                      .r1addr(InstID[11:10]), 
@@ -257,11 +274,28 @@ module PipelinedDatapath(clk,
                            .din(InstData[31:0]), 
                            .we(wea), 
                            .dout(InstIF[31:0]));
-   DataMemory XLXI_34 (.addra(RegData1[7:0]), 
-                       .addrb(RegData1[7:0]), 
+
+   // Host / pipeline–shared data memory control (mirrors lab6)
+   wire        dm_wea   = host_data_we ? 1'b1          : MemWriteEn_EX;
+   wire [7:0]  dm_addra = host_data_we ? host_data_addr: RegData1[7:0];
+   wire [63:0] dm_dina  = host_data_we ? host_data_wr  : MemWriteData_EX[63:0];
+   wire [7:0]  dm_addrb = host_data_rd_en ? host_data_addr : RegData1[7:0];
+   wire [63:0] dm_doutb;
+
+   DataMemory XLXI_34 (.addra(dm_addra), 
+                       .addrb(dm_addrb), 
                        .clka(clk), 
                        .clkb(clk), 
-                       .dina(MemWriteData_EX[63:0]), 
-                       .wea(MemWriteEn_EX), 
-                       .doutb(MemReadData[63:0]));
+                       .dina(dm_dina), 
+                       .wea(dm_wea), 
+                       .doutb(dm_doutb));
+
+   // Pipeline sees MemReadData; host sees latched host_data_rd
+   assign MemReadData = host_data_rd_en ? 64'b0 : dm_doutb;
+
+   reg        host_data_rd_en_d;
+   reg [63:0] host_data_rd_r;
+   always @(posedge clk) host_data_rd_en_d <= host_data_rd_en;
+   always @(posedge clk) if (host_data_rd_en_d) host_data_rd_r <= dm_doutb;
+   assign host_data_rd = host_data_rd_r;
 endmodule
